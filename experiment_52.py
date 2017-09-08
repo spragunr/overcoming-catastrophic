@@ -84,6 +84,8 @@ def train_task(model, sess, num_iter, disp_freq, trainset, testsets, x, y_, acc_
         for iteration in range(num_iter):
             batch = trainset.train.next_batch(100) 
             model.train_step.run(feed_dict={x: batch[0], y_: batch[1]})
+            if hasattr(model, 'penalty'):
+                print model.penalty.eval(feed_dict={x: batch[0], y_: batch[1]}) 
             # controls how frequently to save accuracy for display in graph
             if iteration % disp_freq == 0:
                 
