@@ -12,7 +12,7 @@ import numpy as np
 from scipy.stats.kde import gaussian_kde
 def main():
     fignum = [1]
-    for filename in os.listdir('/home/andrew/REU/overcoming-catastrophic-master/09_08_17'):
+    for filename in os.listdir('/home/andrew/REU/overcoming-catastrophic-master/091717'):
         if filename.endswith('.h5'):
             try:
                 f = h5py.File(filename, 'r')
@@ -106,6 +106,7 @@ def main():
                         plt.legend(loc=3)
                         plt.savefig(filename + "_run_ " + str(run + 1) + ".png")
                         plt.close()
+                        """
                         plt.figure(num=fignum[0] + 1, figsize=(20, 10))
                         plot2 = plt.subplot(111)
                         
@@ -115,6 +116,18 @@ def main():
                         plt.ylabel('Summed Term in EWC Error')
                         plt.axis([1, 25, 0.0, 1])
                         plt.savefig(filename + "_error_sums_run_" + str(run + 1) + ".png")
+                        fignum[0] += 2
+                        plt.close()
+                        """
+                        plt.figure(num=fignum[0] + 1, figsize=(20, 10))
+                        plot2 = plt.subplot(111)
+                        
+                        plot2.set_title(filename + "Penalty Terms run {}".format(str(run + 1)))
+                        plt.plot(f['penalties run {}'.format(str(run + 1))], marker = 'o')
+                        plt.xlabel('tasks')
+                        plt.ylabel('EWC Penalty')
+                        plt.axis([1, 25, 0.0, 2])
+                        plt.savefig(filename + "_penalties_run_" + str(run + 1) + ".png")
                         fignum[0] += 2
                         plt.close()
                         """

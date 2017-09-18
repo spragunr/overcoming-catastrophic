@@ -8,7 +8,7 @@ import h5py
 from copy import deepcopy
 from tensorflow.examples.tutorials.mnist import input_data
 
-from model_52 import Model
+from model_53 import Model
 
 # return a new mnist dataset w/ pixels randomly permuted
 def permute_mnist(mnist):
@@ -85,7 +85,11 @@ def train_task(model, sess, num_iter, disp_freq, trainset, testsets, x, y_, acc_
             batch = trainset.train.next_batch(100) 
             model.train_step.run(feed_dict={x: batch[0], y_: batch[1]})
             if hasattr(model, 'penalty'):
-                print model.penalty.eval(feed_dict={x: batch[0], y_: batch[1]}) 
+                penalties.append(model.penalty.eval(feed_dict={x: batch[0], y_: batch[1]})) 
+                if(lams[l] == 0):
+                    print('SGD', model.penalty.eval(feed_dict={x: batch[0], y_: batch[1]}))
+                else:
+                    print('EWC', model.penalty.eval(feed_dict={x: batch[0], y_: batch[1]}))
             # controls how frequently to save accuracy for display in graph
             if iteration % disp_freq == 0:
                 
@@ -212,6 +216,7 @@ def train_task(model, sess, num_iter, disp_freq, trainset, testsets, x, y_, acc_
         dataFile.create_dataset('most recent task accuracy lambda {} run {}'.format(lams[l], str(run + 1)), data=acc_most_recent_task)
         dataFile.create_dataset('fisher sum run {}'.format(str(run + 1)), data=final_means)
         dataFile.create_dataset('most recent fisher run {}'.format(str(run + 1)), data=fisher_most_recent)
+        dataFile.create_dataset('penalties run {}'.format(str(run + 1)), data=penalties)
         run_over[0] = 1
         if run == int(int(sys.argv[8]) - 1):
             dataFile.close()
@@ -265,6 +270,7 @@ for run in range(int(sys.argv[8])):
     avg_acc_old_tasks = [0, 0]
     acc_most_recent_task = [0, 0]
     fisher_most_recent = [0]
+    penalties = [0, 0]
     run_over = [0]
     for i in range(100):
         tasks += 1
