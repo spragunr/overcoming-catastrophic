@@ -13,35 +13,44 @@ def bias_variable(shape):
     return tf.Variable(initial, validate_shape=False)
 
 class Model: 
-    def __init__(self, x, y_, weights = 30):
+    def __init__(self, x, y_, weights, layers):
         
         in_dim = int(x.get_shape()[1])
         out_dim = int(y_.get_shape()[1])
         
         self.x = x
         
-        self.W1 = weight_variable([in_dim, weights])
-        self.b1 = bias_variable([weights])
+        self.var_list = []
         
-        self.W2 = weight_variable([weights, out_dim])
-        self.b2 = bias_variable([out_dim])
+        self.var_list.append(weight_variable([in_dim, weights]))
+        self.var_list.append(bias_variable([weights]))
         
-        self.var_list = [self.W1, self.b1, self.W2, self.b2]
-        #middle layer
-        self.h1 = tf.nn.relu(tf.matmul(x,self.var_list[0]) + self.var_list[1])
+        for layer in range(layers - 1):
+           self.var_list.append(weight_variable([weights, weights]))
+           self.var_list.append(bias_variable([weights]))
         
-        #output layer
-        self.y = tf.matmul(self.h1,self.var_list[2]) + self.var_list[3] 
-                          
+        self.var_list.append(weight_variable([weights, out_dim]))
+        self.var_list.append(bias_variable([out_dim]))
         
+        self.architecture = []
+        self.architecture.append(x)
+        self.error_sum_array = [0]
+        count = 0
+        
+        for i in range(layers):
+            self.architecture.append(tf.nn.relu(tf.matmul(self.architecture[i], self.var_list[i + count]) + self.var_list[i + count + 1]))
+            count += 1            
+       
+        self.architecture.append(tf.matmul(self.architecture[len(self.architecture) - 1], self.var_list[len(self.var_list) - 2]) + self.var_list[len(self.var_list) - 1])
         
         # vanilla single-task loss
-        self.cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=self.y))
+        self.cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=self.architecture[len(self.architecture) - 1]))
         self.set_vanilla_loss()
         
         #the variables below are lists because of the expand function (see below)
-        self.correct_prediction = tf.equal(tf.argmax(self.y,1), tf.argmax(y_,1))
+        self.correct_prediction = tf.equal(tf.argmax(self.architecture[len(self.architecture) - 1],1), tf.argmax(y_,1))
         self.accuracy = tf.reduce_mean(tf.cast(self.correct_prediction, tf.float32))
+        
     def compute_fisher(self, imgset, sess, F_archives, num_samples=200):
         
         # initialize Fisher information for most recent task
@@ -50,7 +59,7 @@ class Model:
             self.F_accum.append(np.zeros(self.var_list[v].eval().shape))
 
         # sampling a random class from softmax
-        probs = tf.nn.softmax(self.y)
+        probs = tf.nn.softmax(self.architecture[len(self.architecture) - 1])
         class_ind = tf.to_int32(tf.multinomial(tf.log(probs), 1)[0][0])
 
             
@@ -78,21 +87,20 @@ class Model:
         for v in range(len(self.var_list)):
             self.star_vars.append(self.var_list[v].eval())
             
-    def restore(self, sess, weights, x, y_, expanding=False):
+    def restore(self, sess, expanding=False):
         # reassign optimal weights for latest task
         if hasattr(self, "star_vars"):
             if expanding == True:
-                in_dim = int(x.get_shape()[1])
-                out_dim = int(y_.get_shape()[1])
+                expanded_vars = []
                 
-                expand_W1 = weight_variable([in_dim, weights])
-                expand_b1 = bias_variable([weights])
+                for model_var in range(len(self.var_list) - 1):
+                    if model_var % 2 == 0:
+                        expanded_vars.append(weight_variable(list(self.var_list[model_var].eval().shape)))
+                    else:
+                        expanded_vars.append(bias_variable(list(self.var_list[model_var].eval().shape)))
                 
-                expand_W2 = weight_variable([weights, out_dim])
+                sess.run(tf.variables_initializer(expanded_vars))
                 
-                sess.run(tf.variables_initializer([expand_W1, expand_b1, expand_W2]))
-                
-                expanded_vars = [expand_W1, expand_b1, expand_W2]
                 
                 for ex_var in range(len(expanded_vars)):
                     axis = -1
@@ -131,41 +139,54 @@ class Model:
                         self.star_vars[saved_var] = np.append(self.star_vars[saved_var], expanded_vars[saved_var].eval(), axis = 0)
                         self.star_vars[saved_var] = np.append(self.star_vars[saved_var], expanded_vars[saved_var].eval(), axis = 1)
                 
-                self.h1 = tf.nn.relu(tf.matmul(x,self.var_list[0]) + self.var_list[1])
-                self.y = tf.matmul(self.h1,self.var_list[2]) + self.var_list[3] 
-                
-                
-                self.cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=self.y))
-                self.correct_prediction = tf.equal(tf.argmax(self.y,1), tf.argmax(y_,1))
-                self.accuracy = tf.reduce_mean(tf.cast(self.correct_prediction, tf.float32))
-            
             for v in range(len(self.star_vars)):
                 sess.run(tf.assign(self.var_list[v], self.star_vars[v]))
                 
     def set_vanilla_loss(self):
         
-        self.train_step = tf.train.GradientDescentOptimizer(0.1).minimize(self.cross_entropy)
+        self.train_step = tf.train.AdamOptimizer().minimize(self.cross_entropy)
     
     def update_ewc_loss(self, lam, F_archives, dim_dict):
         # elastic weight consolidation
         # lam is weighting for previous task(s) constraints
         self.ewc_loss = self.cross_entropy
-        
-        if len(F_archives) <= 1:
+        expansion = 100
+
+        penalty = tf.constant(0.0)
+        if len(F_archives) <= expansion - 2:
             for F_matrix in range(len(F_archives)):
                 for net_var in range(len(self.var_list)):
-                    self.ewc_loss += (lam/2) * tf.reduce_sum(tf.multiply(F_archives[F_matrix][net_var].astype(np.float32),tf.square(self.var_list[net_var] - self.star_vars[net_var])))
-        else:
-            for F_matrix_index in range(1):
-                for tensor in range(len(self.var_list) - 1):
-                    print(dim_dict[2][tensor])
-                    if tensor % 2 == 0:
-                        self.ewc_loss += (lam/2) * tf.reduce_sum(tf.multiply(F_archives[F_matrix_index][tensor].astype(np.float32),tf.square(tf.slice(self.var_list[tensor], [0,0], dim_dict[2][tensor]) - tf.slice(self.star_vars[tensor], [0,0], dim_dict[2][tensor]))))
-                    else:    
-                        self.ewc_loss += (lam/2) * tf.reduce_sum(tf.multiply(F_archives[F_matrix_index][tensor].astype(np.float32),tf.square(tf.slice(self.var_list[tensor], [0], dim_dict[2][tensor]) - tf.slice(self.star_vars[tensor], [0], dim_dict[2][tensor]))))
+                    penalty += tf.reduce_sum(tf.multiply(F_archives[F_matrix][net_var].astype(np.float32),tf.square(self.var_list[net_var] - self.star_vars[net_var])))
+            self.ewc_loss += (lam/2.0) * penalty
                     
-                self.ewc_loss += (lam/2) * tf.reduce_sum(tf.multiply(F_archives[F_matrix_index][len(F_archives[F_matrix_index]) - 1].astype(np.float32),tf.square(self.var_list[len(self.var_list) - 1] - self.star_vars[len(self.star_vars) - 1])))
+        else:
+            for F_matrix_index in range(expansion - 2):
+                for tensor in range(len(self.var_list) - 1):
+                    if tensor % 2 == 0:
+                        self.ewc_loss += (lam/2) * \
+                        tf.reduce_sum(tf.multiply(F_archives[F_matrix_index][tensor].astype(np.float32),tf.square(tf.slice(self.var_list[tensor],
+                                                                                                                           [0,0], dim_dict[expansion - 1][tensor]) -
+                                                                                                                  tf.slice(self.star_vars[tensor], [0,0],
+                                                                                                                           dim_dict[expansion - 1][tensor]))))
+                        
+                    else:
+                        self.ewc_loss += (lam/2) * \
+                        tf.reduce_sum(tf.multiply(F_archives[F_matrix_index][tensor].astype(np.float32),tf.square(tf.slice(self.var_list[tensor],
+                                                                                                                           [0], dim_dict[expansion - 1][tensor]) -
+                                                                                                                  tf.slice(self.star_vars[tensor], [0],
+                                                                                                                           dim_dict[expansion - 1][tensor]))))
+                        
+                self.ewc_loss += (lam/2) * \
+                tf.reduce_sum(tf.multiply(F_archives[F_matrix_index][len(F_archives[F_matrix_index])
+                                                                     -
+                                                                     1].astype(np.float32),tf.square(self.var_list[len(self.var_list)
+                                                                                                                   - 1] - self.star_vars[len(self.star_vars) - 1])))
+                
             for v in range(len(self.var_list)):
-                for F_matrix_expanded in range(1, len(F_archives)):
-                    self.ewc_loss += (lam/2) * tf.reduce_sum(tf.multiply(F_archives[F_matrix_expanded][v].astype(np.float32),tf.square(self.var_list[v] - self.star_vars[v])))
+                for F_matrix_expanded in range(expansion - 2, len(F_archives)):
+                    self.ewc_loss += (lam/2) * \
+                    tf.reduce_sum(tf.multiply(F_archives[F_matrix_expanded][v].astype(np.float32),tf.square(self.var_list[v]
+                                                                                                            - self.star_vars[v])))          
+        
         self.train_step = tf.train.GradientDescentOptimizer(0.1).minimize(self.ewc_loss)
+        self.penalty = penalty
